@@ -99,9 +99,9 @@ State *S0 = srSm.addState(&serialReceive);
 State *S1 = srSm.addState(&serialTransmit);
 
 StateMachine sm = StateMachine();
-State *M0 = srSm.addState(&st_idle);
-State *M1 = srSm.addState(&st_pump_on);
-State *M2 = srSm.addState(&st_gas_stove_on);
+State *M0 = sm.addState(&st_idle);
+State *M1 = sm.addState(&st_pump_on);
+State *M2 = sm.addState(&st_gas_stove_on);
 
 void setup() {
     // SERIAL to PC configuration
@@ -127,11 +127,12 @@ void setup() {
 
     // read current value of STOVE TEMP
     uint8_t storedTemp = EEPROM.read(PUMP_START_TEMP_EEPROM_ADDR);
-    if (storedTemp > 0) {
+    if (storedTemp > 0 && storedTemp < 70) {
         stoveCtl.startPumpTemp = storedTemp;
     } else {
         EEPROM.write(PUMP_START_TEMP_EEPROM_ADDR, 40);
     }
+    printf("Stored Start Pump temp = %d", storedTemp);
 }
 
 void loop() {
@@ -270,12 +271,12 @@ void readThermistor() {
 uint8_t lct = 0;
 
 void st_idle(void) {
-    if (lct == 0 && timerExceed(t0, 2000)) {
+    if (lct == 0 && timerExceed(t0, 3000)) {
         resetTimer(t0);
         digitalWrite(LED, HIGH);
         lct++;
     }
-    if (lct == 1 && timerExceed(t0, 300)) {
+    if (lct == 1 && timerExceed(t0, 100)) {
         resetTimer(t0);
         digitalWrite(LED, LOW);
         lct = 0;
@@ -288,13 +289,13 @@ void st_pump_on(void) {
         digitalWrite(LED, HIGH);
         lct++;
     }
-    if (lct > 0 && lct % 2 == 1 && timerExceed(t0, 200)) {
+    if (lct > 0 && lct % 2 == 1 && timerExceed(t0, 50)) {
         resetTimer(t0);
         digitalWrite(LED, LOW);
         lct++;
-        lct &=0x07;
+        lct &=0b00001111;
     }
-    if (lct > 0 && lct % 2 == 0 && timerExceed(t0, 300)) {
+    if (lct > 0 && lct % 2 == 0 && timerExceed(t0, 100)) {
         resetTimer(t0);
         digitalWrite(LED, HIGH);
         lct++;
