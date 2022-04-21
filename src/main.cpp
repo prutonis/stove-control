@@ -38,8 +38,10 @@ SoftwareSerial ser1(SER1_RX, SER1_TX);  // RX, TX
 #define M_REPLY_OK "%sOK\n"
 #define M_STOVE_PUMP_START_TEMP "set_spt="
 #define M_GET_INFO "info"
+#define M_START_STOP_TEMP_DELTA "set_delta="
 
 #define PUMP_START_TEMP_EEPROM_ADDR 16
+#define START_STOP_TEMP_DELTA_EEPROM_ADDR 18
 
 #define stringStartsWith(s, p) (strncmp(s, p, strlen(p)) == 0)
 #define stringEquals(s1, s2) (strcmp(s1, s2) == 0)
@@ -60,6 +62,8 @@ void serialTransmit(void);
 void stovePumpSet(bool onOff);
 void gasBoilerSet(bool onOff);
 void readThermistor(void);
+bool transitionS0S1();
+bool transitionS1S0();
 
 void st_idle(void);
 void st_pump_on(void);
@@ -90,9 +94,10 @@ struct StoveCtl {
     int lastTemp;
     int currentTemp;
     int startPumpTemp;
+    uint8_t startStopTempDelta;
     bool gasBoilerOn;
     bool stovePumpOn;
-} stoveCtl = {false, 0, 0, 40, false, false};
+} stoveCtl = {false, 0, 0, 40, 5, false, false};
 
 StateMachine srSm = StateMachine();
 State *S0 = srSm.addState(&serialReceive);
@@ -104,6 +109,8 @@ State *M1 = sm.addState(&st_pump_on);
 State *M2 = sm.addState(&st_gas_stove_on);
 
 void setup() {
+    S0->addTransition(&transitionS0S1, S1);
+    S1->addTransition(&transitionS1S0, S0);
     // SERIAL to PC configuration
     Serial.begin(9600);
     while (!Serial) {
@@ -130,15 +137,24 @@ void setup() {
     if (storedTemp > 0 && storedTemp < 70) {
         stoveCtl.startPumpTemp = storedTemp;
     } else {
-        EEPROM.write(PUMP_START_TEMP_EEPROM_ADDR, 40);
+        EEPROM.write(PUMP_START_TEMP_EEPROM_ADDR, 27);
     }
-    printf("Stored Start Pump temp = %d", storedTemp);
+
+    uint8_t tempDelta = EEPROM.read(START_STOP_TEMP_DELTA_EEPROM_ADDR);
+   if (tempDelta > 0 && tempDelta < 20) {
+        stoveCtl.startStopTempDelta = tempDelta;
+    } else {
+        EEPROM.write(START_STOP_TEMP_DELTA_EEPROM_ADDR, 3);
+    }
+
+    printf("Stored Start Pump temp = %d, delta = %d\n", storedTemp, tempDelta);
 }
 
 void loop() {
     if (timerExceed(t1, 5000)) {
         resetTimer(t1);
         readThermistor();
+        printf("State: %d\n", sm.currentState);
     }
     if (timerExceed(t2, 10000)) {
         resetTimer(t2);
@@ -147,15 +163,15 @@ void loop() {
                 stovePumpSet(true);
                 Serial.println("STOVE PUMP ON");
                 sm.transitionTo(M1);
-            } else if (stoveCtl.currentTemp < (stoveCtl.startPumpTemp - 10) && stoveCtl.stovePumpOn) {
+            } else if (stoveCtl.currentTemp < (stoveCtl.startPumpTemp - stoveCtl.startStopTempDelta) && stoveCtl.stovePumpOn) {
                 stovePumpSet(false);
                 Serial.println("STOVE PUMP OFF");
                 sm.transitionTo(M0);
             }
         }
     }
-    srSm.run();
     sm.run();
+    srSm.run();
 }
 
 void serialReceive() {
@@ -172,7 +188,6 @@ void serialReceive() {
             if (stringStartsWith(serCtl.rmsg, DEVICE_SID)) {
                 serCtl.rcmd = serCtl.rmsg + strlen(DEVICE_SID);
                 printf("\nReceived: %s\n", serCtl.rcmd);
-                srSm.transitionTo(S1);
             }
             return;
         }
@@ -184,44 +199,63 @@ void serialReceive() {
 void serialTransmit() {
     digitalWrite(SER1_TDC, HIGH);
     delay(100);
+    printf("Process cmd '%s'\n", serCtl.rcmd);
     if (stringStartsWith(serCtl.rcmd, M_GET_STOVE_TEMP)) {
         sprintf(serCtl.tmsg, M_REPLY_STOVE_TEMP, MASTER_SID, stoveCtl.currentTemp);
-        printf("Reply stove temp = %d.", stoveCtl.currentTemp);
+        printf("Reply stove temp = %d\n", stoveCtl.currentTemp);
     } else if (stringStartsWith(serCtl.rcmd, M_GET_STATUS)) {
         sprintf(serCtl.tmsg, M_REPLY_STATUS, MASTER_SID, "OK");
-        printf("Reply status...");
+        printf("Reply status...\n");
     } else if (stringStartsWith(serCtl.rcmd, M_PUMP_ON)) {
-        printf("Pump on");
+        printf("Pump on\n");
         stovePumpSet(true);
         sm.transitionTo(M1);
     } else if (stringStartsWith(serCtl.rcmd, M_PUMP_OFF)) {
-        printf("Pump off");
+        printf("Pump off\n");
         stovePumpSet(false);
         sm.transitionTo(M0);
     } else if (stringStartsWith(serCtl.rcmd, M_GAS_BOILER_ON)) {
-        printf("Gas Boiler on");
+        printf("Gas Boiler on\n");
         gasBoilerSet(true);
         sm.transitionTo(M2);
     } else if (stringStartsWith(serCtl.rcmd, M_GAS_BOILER_OFF)) {
-        printf("Gas Boiler off");
+        printf("Gas Boiler off\n");
         gasBoilerSet(false);
         sm.transitionTo(M0);
     } else if (stringStartsWith(serCtl.rcmd, M_STOVE_PUMP_START_TEMP)) {
         char *p = serCtl.rcmd + strlen(M_STOVE_PUMP_START_TEMP);
         String s = String(p);
         int newTemp = s.toInt();
-        printf("Set new startPumpTemp=%d", newTemp);
+        printf("Set new startPumpTemp=%d\n", newTemp);
         stoveCtl.startPumpTemp = newTemp;
         EEPROM.write(PUMP_START_TEMP_EEPROM_ADDR, stoveCtl.startPumpTemp);
+    } else if (stringStartsWith(serCtl.rcmd, M_START_STOP_TEMP_DELTA)) {
+        char *p = serCtl.rcmd + strlen(M_START_STOP_TEMP_DELTA);
+        String s = String(p);
+        uint8_t newDelta = s.toInt();
+        printf("Set new delta=%d\n", newDelta);
+        stoveCtl.startStopTempDelta = newDelta;
+        EEPROM.write(START_STOP_TEMP_DELTA_EEPROM_ADDR, stoveCtl.startStopTempDelta);
     } else if (stringStartsWith(serCtl.rcmd, M_GET_INFO)) {
-        sprintf(serCtl.tmsg, "%src=%d,ct=%d,lt=%d,spt=%d,gb=%d,sp=%d", MASTER_SID, stoveCtl.remoteCtrl, stoveCtl.currentTemp, stoveCtl.lastTemp, stoveCtl.startPumpTemp, stoveCtl.gasBoilerOn, stoveCtl.stovePumpOn);
-        printf("Status: rc=%d,ct=%d,lt=%d,spt=%d,gb=%d,sp=%d", stoveCtl.remoteCtrl, stoveCtl.currentTemp, stoveCtl.lastTemp, stoveCtl.startPumpTemp, stoveCtl.gasBoilerOn, stoveCtl.stovePumpOn);
+        sprintf(serCtl.tmsg, "%src=%d,ct=%d,lt=%d,spt=%d,delta=%d,gb=%d,sp=%d", MASTER_SID, stoveCtl.remoteCtrl, stoveCtl.currentTemp, stoveCtl.lastTemp, stoveCtl.startPumpTemp, stoveCtl.startStopTempDelta, stoveCtl.gasBoilerOn, stoveCtl.stovePumpOn);
+        printf("Status: rc=%d,ct=%d,lt=%d,spt=%d,delta=%d,gb=%d,sp=%d\n", stoveCtl.remoteCtrl, stoveCtl.currentTemp, stoveCtl.lastTemp, stoveCtl.startPumpTemp, stoveCtl.startStopTempDelta, stoveCtl.gasBoilerOn, stoveCtl.stovePumpOn);
     } else {
         sprintf(serCtl.tmsg, M_REPLY_UNKNOWN_CMD, MASTER_SID);
-        printf("Unknown cmd.");
+        printf("Unknown cmd.\n");
     }
-    ser1.print(serCtl.tmsg);
-    srSm.transitionTo(S0);
+    ser1.println(serCtl.tmsg);
+    serCtl.rcmd = NULL;
+}
+
+bool transitionS0S1() {
+    if (serCtl.rcmd != NULL) {
+        return true;
+    }
+    return false;
+}
+
+bool transitionS1S0() {
+    return !transitionS0S1();
 }
 
 void stovePumpSet(bool onOff) {
