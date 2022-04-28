@@ -16,7 +16,7 @@
 #define SER1_RX 7
 #define SER1_TX 8
 #define SER1_TDC 9
-#define SER1_BUF_LEN 64
+#define SER1_BUF_LEN 128
 SoftwareSerial ser1(SER1_RX, SER1_TX);  // RX, TX
 
 #define LED LED_BUILTIN
@@ -39,12 +39,15 @@ SoftwareSerial ser1(SER1_RX, SER1_TX);  // RX, TX
 #define M_STOVE_PUMP_START_TEMP "set_spt="
 #define M_GET_INFO "info"
 #define M_START_STOP_TEMP_DELTA "set_delta="
+#define M_REMOTE_CTRL_OFF "rc_off"
 
 #define PUMP_START_TEMP_EEPROM_ADDR 16
 #define START_STOP_TEMP_DELTA_EEPROM_ADDR 18
 
 #define stringStartsWith(s, p) (strncmp(s, p, strlen(p)) == 0)
 #define stringEquals(s1, s2) (strcmp(s1, s2) == 0)
+#define remoteControlOn() stoveCtl.remoteCtrl = true
+#define remoteControlOff() stoveCtl.remoteCtrl = false
 
 // THERMISTOR defines
 // These values are in the datasheet
@@ -208,19 +211,32 @@ void serialTransmit() {
         printf("Reply status...\n");
     } else if (stringStartsWith(serCtl.rcmd, M_PUMP_ON)) {
         printf("Pump on\n");
+        sprintf(serCtl.tmsg, "%spump_on:ok", MASTER_SID);
         stovePumpSet(true);
+        remoteControlOn();
         sm.transitionTo(M1);
     } else if (stringStartsWith(serCtl.rcmd, M_PUMP_OFF)) {
         printf("Pump off\n");
+        sprintf(serCtl.tmsg, "%spump_off:ok", MASTER_SID);
         stovePumpSet(false);
+        remoteControlOn();
         sm.transitionTo(M0);
     } else if (stringStartsWith(serCtl.rcmd, M_GAS_BOILER_ON)) {
         printf("Gas Boiler on\n");
+        sprintf(serCtl.tmsg, "%sgas_boiler_on:ok", MASTER_SID);
         gasBoilerSet(true);
+        remoteControlOn();
         sm.transitionTo(M2);
     } else if (stringStartsWith(serCtl.rcmd, M_GAS_BOILER_OFF)) {
         printf("Gas Boiler off\n");
+        sprintf(serCtl.tmsg, "%sgas_bolier_off:ok", MASTER_SID);
         gasBoilerSet(false);
+        remoteControlOn();
+        sm.transitionTo(M0);
+    } else if (stringStartsWith(serCtl.rcmd, M_REMOTE_CTRL_OFF)) {
+        printf("Remote control off\n");
+        sprintf(serCtl.tmsg, "%sremote_ctrl:off", MASTER_SID);
+        remoteControlOff();
         sm.transitionTo(M0);
     } else if (stringStartsWith(serCtl.rcmd, M_STOVE_PUMP_START_TEMP)) {
         char *p = serCtl.rcmd + strlen(M_STOVE_PUMP_START_TEMP);
@@ -229,6 +245,7 @@ void serialTransmit() {
         printf("Set new startPumpTemp=%d\n", newTemp);
         stoveCtl.startPumpTemp = newTemp;
         EEPROM.write(PUMP_START_TEMP_EEPROM_ADDR, stoveCtl.startPumpTemp);
+        sprintf(serCtl.tmsg, "%sset_start_temp=%d:ok", MASTER_SID, stoveCtl.startPumpTemp);
     } else if (stringStartsWith(serCtl.rcmd, M_START_STOP_TEMP_DELTA)) {
         char *p = serCtl.rcmd + strlen(M_START_STOP_TEMP_DELTA);
         String s = String(p);
@@ -236,6 +253,7 @@ void serialTransmit() {
         printf("Set new delta=%d\n", newDelta);
         stoveCtl.startStopTempDelta = newDelta;
         EEPROM.write(START_STOP_TEMP_DELTA_EEPROM_ADDR, stoveCtl.startStopTempDelta);
+        sprintf(serCtl.tmsg, "%sset_delta_temp=%d:ok", MASTER_SID, stoveCtl.startStopTempDelta);
     } else if (stringStartsWith(serCtl.rcmd, M_GET_INFO)) {
         sprintf(serCtl.tmsg, "%src=%d,ct=%d,lt=%d,spt=%d,delta=%d,gb=%d,sp=%d", MASTER_SID, stoveCtl.remoteCtrl, stoveCtl.currentTemp, stoveCtl.lastTemp, stoveCtl.startPumpTemp, stoveCtl.startStopTempDelta, stoveCtl.gasBoilerOn, stoveCtl.stovePumpOn);
         printf("Status: rc=%d,ct=%d,lt=%d,spt=%d,delta=%d,gb=%d,sp=%d\n", stoveCtl.remoteCtrl, stoveCtl.currentTemp, stoveCtl.lastTemp, stoveCtl.startPumpTemp, stoveCtl.startStopTempDelta, stoveCtl.gasBoilerOn, stoveCtl.stovePumpOn);
@@ -243,6 +261,7 @@ void serialTransmit() {
         sprintf(serCtl.tmsg, M_REPLY_UNKNOWN_CMD, MASTER_SID);
         printf("Unknown cmd.\n");
     }
+    printf("Message to send: %s\n", serCtl.tmsg);
     ser1.println(serCtl.tmsg);
     serCtl.rcmd = NULL;
 }
