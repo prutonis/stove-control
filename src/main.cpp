@@ -27,15 +27,15 @@ SoftwareSerial ser1(SER1_RX, SER1_TX);  // RX, TX
 #define TEMP_SENSOR A0
 
 #define M_GET_STATUS "status?"
-#define M_REPLY_STATUS "%sstatus=%s\n"
+#define M_REPLY_STATUS "%sstatus=%s"
 #define M_GET_STOVE_TEMP "stove?"
-#define M_REPLY_STOVE_TEMP "%sstove=%d\n"
-#define M_REPLY_UNKNOWN_CMD "%s#?\n"
+#define M_REPLY_STOVE_TEMP "%sstove=%d"
+#define M_REPLY_UNKNOWN_CMD "%s#?"
 #define M_PUMP_ON "pump_on"
 #define M_PUMP_OFF "pump_off"
 #define M_GAS_BOILER_ON "gb_on"
 #define M_GAS_BOILER_OFF "gb_off"
-#define M_REPLY_OK "%sOK\n"
+#define M_REPLY_OK "%sOK"
 #define M_STOVE_PUMP_START_TEMP "set_spt="
 #define M_GET_INFO "info"
 #define M_START_STOP_TEMP_DELTA "set_delta="
@@ -71,6 +71,7 @@ bool transitionS1S0();
 void st_idle(void);
 void st_pump_on(void);
 void st_gas_stove_on(void);
+uint8_t checkSum(char *msg);
 
 // Variables
 float RT, VR, ln, TX, T0, VRT;  // for thermistor
@@ -261,7 +262,9 @@ void serialTransmit() {
         sprintf(serCtl.tmsg, M_REPLY_UNKNOWN_CMD, MASTER_SID);
         printf("Unknown cmd.\n");
     }
-    printf("Message to send: %s\n", serCtl.tmsg);
+    uint8_t crc = checkSum(serCtl.tmsg);
+    printf("Message to send: %s, checksum=%X\n", serCtl.tmsg, crc);
+    sprintf(serCtl.tmsg, "%s|0X%X|", serCtl.tmsg, crc);
     ser1.println(serCtl.tmsg);
     serCtl.rcmd = NULL;
 }
@@ -361,4 +364,12 @@ void st_gas_stove_on(void) {
         resetTimer(t0);
         digitalWrite(LED, !digitalRead(LED));
     }
+}
+
+uint8_t checkSum(char *msg) {
+    uint8_t x = 0;
+    for (uint8_t i = 0; i < strlen(msg); i++) {
+        x = (x + msg[i]) & 0xff;
+    }
+    return 0xff - x;
 }
