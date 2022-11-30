@@ -3,6 +3,8 @@
 #include <LibPrintf.h>
 #include <SoftwareSerial.h>
 #include <StateMachine.h>
+#include <OneWire.h> 
+#include <DallasTemperature.h>
 
 #define DEVICE_ID "SC"
 #define DEVICE_SID "SC:"
@@ -60,6 +62,18 @@ SoftwareSerial ser1(SER1_RX, SER1_TX);  // RX, TX
 #define STOVE_PUMP_PIN A2
 #define GAS_BOILER_PIN A1
 
+/********************************************************************/
+// Data wire is plugged into pin 3 on the Arduino 
+#define ONE_WIRE_BUS 3 
+/********************************************************************/
+// Setup a oneWire instance to communicate with any OneWire devices  
+// (not just Maxim/Dallas temperature ICs) 
+OneWire oneWire(ONE_WIRE_BUS); 
+/********************************************************************/
+// Pass our oneWire reference to Dallas Temperature. 
+DallasTemperature sensors(&oneWire);
+/********************************************************************/ 
+
 void serialReceive(void);
 void serialTransmit(void);
 void stovePumpSet(bool onOff);
@@ -95,6 +109,8 @@ struct SerCtl {
 
 struct StoveCtl {
     bool remoteCtrl;
+    int lastStoveTemp;
+    int currentStoveTemp;
     int lastTemp;
     int currentTemp;
     int startPumpTemp;
@@ -152,6 +168,7 @@ void setup() {
     }
 
     printf("Stored Start Pump temp = %d, delta = %d\n", storedTemp, tempDelta);
+    sensors.begin(); 
 }
 
 void loop() {
@@ -205,8 +222,8 @@ void serialTransmit() {
     delay(100);
     printf("Process cmd '%s'\n", serCtl.rcmd);
     if (stringStartsWith(serCtl.rcmd, M_GET_STOVE_TEMP)) {
-        sprintf(serCtl.tmsg, M_REPLY_STOVE_TEMP, MASTER_SID, stoveCtl.currentTemp);
-        printf("Reply stove temp = %d\n", stoveCtl.currentTemp);
+        sprintf(serCtl.tmsg, M_REPLY_STOVE_TEMP, MASTER_SID, stoveCtl.currentStoveTemp);
+        printf("Reply stove temp = %d\n", stoveCtl.currentStoveTemp);
     } else if (stringStartsWith(serCtl.rcmd, M_GET_STATUS)) {
         sprintf(serCtl.tmsg, M_REPLY_STATUS, MASTER_SID, "OK");
         printf("Reply status...\n");
@@ -319,8 +336,14 @@ void readThermistor() {
     Serial.println(TX);
 
     // stoveCtl
+    stoveCtl.lastStoveTemp = stoveCtl.currentStoveTemp;
+    stoveCtl.currentStoveTemp = TX;
+}
+
+void readDS18B20() {
+    sensors.requestTemperatures();
     stoveCtl.lastTemp = stoveCtl.currentTemp;
-    stoveCtl.currentTemp = TX;
+    stoveCtl.currentTemp = sensors.getTempCByIndex(0);
 }
 
 
