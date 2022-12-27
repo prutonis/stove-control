@@ -20,6 +20,7 @@
 #define SER1_TX 8
 #define SER1_TDC 9
 #define SER1_BUF_LEN 128
+#define VW_MAX_MESSAGE_LEN 32
 SoftwareSerial ser1(SER1_RX, SER1_TX);  // RX, TX
 
 #define LED LED_BUILTIN
@@ -93,9 +94,10 @@ float RT, VR, ln, TX, T0, VRT;  // for thermistor
 
 uint32_t t0, t1, t2, t3, t4, t5;  // timers
 uint16_t pulseCt;
-bool last = HIGH;
+bool last = HIGH, vwMr = false;
 uint8_t ct = 0;
 char serialBuffer[SER1_BUF_LEN] = "";
+char vwbuffer[VW_MAX_MESSAGE_LEN] = "";
 struct SerCtl {
     char *rmsg;
     char *rcmd;
@@ -111,8 +113,6 @@ struct SerCtl {
 
 struct StoveCtl {
     bool remoteCtrl;
-    int lastStoveTemp;
-    int currentStoveTemp;
     int lastTemp;
     int currentTemp;
     int startPumpTemp;
@@ -129,8 +129,8 @@ StateMachine sm = StateMachine();
 State *M0 = sm.addState(&st_idle);
 State *M1 = sm.addState(&st_pump_on);
 State *M2 = sm.addState(&st_gas_stove_on);
-char buf[VW_MAX_MESSAGE_LEN];
-uint8_t buflen = VW_MAX_MESSAGE_LEN;
+
+void printInfo(bool printToTxBuffer);
 
 void setup() {
     S0->addTransition(&transitionS0S1, S1);
@@ -175,7 +175,7 @@ void setup() {
     sensors.begin();
 
     // One wire setup
-    vw_set_rx_pin(10);
+    vw_set_rx_pin(2);
     vw_setup(2000);  // Bits per sec
     vw_rx_start();  // Start the receiver PLL running
 }
@@ -185,6 +185,7 @@ void loop() {
         resetTimer(t1);
         readThermistor();
         printf("State: %d\n", sm.currentState);
+        printInfo(false);
     }
     if (timerExceed(t2, 10000)) {
         resetTimer(t2);
@@ -203,9 +204,16 @@ void loop() {
     sm.run();
     srSm.run();
 
+    uint8_t vwbuf[VW_MAX_MESSAGE_LEN];
+    uint8_t vwbuflen = VW_MAX_MESSAGE_LEN;
 
-    if (vw_get_message(buf, &buflen)) {  // Non-blocking
-        pulseCt = atoi(buf);
+    if (vw_get_message(&vwbuf[0], &vwbuflen)) {  // Non-blocking
+        for (uint8_t i = 0; i < vwbuflen; i++) {
+            vwbuffer[i] = vwbuf[i];
+        }
+        vwbuffer[vwbuflen] = '\0';
+        printf("Radio msg[size=%d]: %s\n", vwbuflen, vwbuffer);
+        
     }
 }
 
@@ -236,8 +244,8 @@ void serialTransmit() {
     delay(100);
     printf("Process cmd '%s'\n", serCtl.rcmd);
     if (stringStartsWith(serCtl.rcmd, M_GET_STOVE_TEMP)) {
-        sprintf(serCtl.tmsg, M_REPLY_STOVE_TEMP, MASTER_SID, stoveCtl.currentStoveTemp);
-        printf("Reply stove temp = %d\n", stoveCtl.currentStoveTemp);
+        sprintf(serCtl.tmsg, M_REPLY_STOVE_TEMP, MASTER_SID, stoveCtl.currentTemp);
+        printf("Reply stove temp = %d\n", stoveCtl.currentTemp);
     } else if (stringStartsWith(serCtl.rcmd, M_GET_STATUS)) {
         sprintf(serCtl.tmsg, M_REPLY_STATUS, MASTER_SID, "OK");
         printf("Reply status...\n");
@@ -287,8 +295,7 @@ void serialTransmit() {
         EEPROM.write(START_STOP_TEMP_DELTA_EEPROM_ADDR, stoveCtl.startStopTempDelta);
         sprintf(serCtl.tmsg, "%sset_delta_temp=%d:ok", MASTER_SID, stoveCtl.startStopTempDelta);
     } else if (stringStartsWith(serCtl.rcmd, M_GET_INFO)) {
-        sprintf(serCtl.tmsg, "%src=%d,ct=%d,lt=%d,spt=%d,delta=%d,gb=%d,sp=%d,pulseCt=%s", MASTER_SID, stoveCtl.remoteCtrl, stoveCtl.currentTemp, stoveCtl.lastTemp, stoveCtl.startPumpTemp, stoveCtl.startStopTempDelta, stoveCtl.gasBoilerOn, stoveCtl.stovePumpOn, buf);
-        printf("Status: rc=%d,ct=%d,lt=%d,spt=%d,delta=%d,gb=%d,sp=%d,pulseCt=%s\n", stoveCtl.remoteCtrl, stoveCtl.currentTemp, stoveCtl.lastTemp, stoveCtl.startPumpTemp, stoveCtl.startStopTempDelta, stoveCtl.gasBoilerOn, stoveCtl.stovePumpOn, buf);
+        printInfo(true);
     } else {
         sprintf(serCtl.tmsg, M_REPLY_UNKNOWN_CMD, MASTER_SID);
         printf("Unknown cmd.\n");
@@ -350,8 +357,15 @@ void readThermistor() {
     Serial.println(TX);
 
     // stoveCtl
-    stoveCtl.lastStoveTemp = stoveCtl.currentStoveTemp;
-    stoveCtl.currentStoveTemp = TX;
+    stoveCtl.lastTemp = stoveCtl.currentTemp;
+    stoveCtl.currentTemp = TX;
+}
+
+void printInfo(bool printToTxBuffer) {
+    if (printToTxBuffer) {
+        sprintf(serCtl.tmsg, "%src=%d,ct=%d,lt=%d,spt=%d,delta=%d,gb=%d,sp=%d,%s", MASTER_SID, stoveCtl.remoteCtrl, stoveCtl.currentTemp, stoveCtl.lastTemp, stoveCtl.startPumpTemp, stoveCtl.startStopTempDelta, stoveCtl.gasBoilerOn, stoveCtl.stovePumpOn, vwbuffer);
+    }
+    printf("Status: rc=%d,ct=%d,lt=%d,spt=%d,delta=%d,gb=%d,sp=%d, %s\n", stoveCtl.remoteCtrl, stoveCtl.currentTemp, stoveCtl.lastTemp, stoveCtl.startPumpTemp, stoveCtl.startStopTempDelta, stoveCtl.gasBoilerOn, stoveCtl.stovePumpOn, vwbuffer);
 }
 
 void readDS18B20() {
@@ -368,7 +382,7 @@ void st_idle(void) {
         digitalWrite(LED, HIGH);
         lct++;
     }
-    if (lct == 1 && timerExceed(t0, 100)) {
+    if (lct == 1 && timerExceed(t0, 40)) {
         resetTimer(t0);
         digitalWrite(LED, LOW);
         lct = 0;
