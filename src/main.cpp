@@ -64,9 +64,10 @@ SoftwareSerial ser1(SER1_RX, SER1_TX);  // RX, TX
 #define STOVE_PUMP_PIN A2
 #define GAS_BOILER_PIN A1
 
+#define RADIO_POWER_PIN 3
 /********************************************************************/
 // Data wire is plugged into pin 3 on the Arduino
-#define ONE_WIRE_BUS 3
+#define ONE_WIRE_BUS 4
 /********************************************************************/
 // Setup a oneWire instance to communicate with any OneWire devices
 // (not just Maxim/Dallas temperature ICs)
@@ -133,6 +134,10 @@ State *M2 = sm.addState(&st_gas_stove_on);
 void printInfo(bool printToTxBuffer);
 
 void setup() {
+    // turn on 
+    pinMode(RADIO_POWER_PIN, OUTPUT);
+    digitalWrite(RADIO_POWER_PIN, HIGH);
+
     S0->addTransition(&transitionS0S1, S1);
     S1->addTransition(&transitionS1S0, S0);
     // SERIAL to PC configuration
@@ -143,6 +148,7 @@ void setup() {
         ;
     }
     Serial.println("SOBA-CAZAN Pornit...");
+
 
     // Serial to RPI Configuration
     pinMode(SER1_TDC, OUTPUT);
@@ -174,7 +180,7 @@ void setup() {
     printf("Stored Start Pump temp = %d, delta = %d\n", storedTemp, tempDelta);
     sensors.begin();
 
-    // One wire setup
+    // Virtual wire setup
     vw_set_rx_pin(2);
     vw_setup(2000);  // Bits per sec
     vw_rx_start();  // Start the receiver PLL running
@@ -363,9 +369,10 @@ void readThermistor() {
 
 void printInfo(bool printToTxBuffer) {
     if (printToTxBuffer) {
-        sprintf(serCtl.tmsg, "%src=%d,ct=%d,lt=%d,spt=%d,delta=%d,gb=%d,sp=%d,%s", MASTER_SID, stoveCtl.remoteCtrl, stoveCtl.currentTemp, stoveCtl.lastTemp, stoveCtl.startPumpTemp, stoveCtl.startStopTempDelta, stoveCtl.gasBoilerOn, stoveCtl.stovePumpOn, vwbuffer);
+        sprintf(serCtl.tmsg, "%src=%d,ct=%d,lt=%d,spt=%d,delta=%d,gb=%d,sp=%d,vw=%s", MASTER_SID, stoveCtl.remoteCtrl, stoveCtl.currentTemp, stoveCtl.lastTemp, stoveCtl.startPumpTemp, stoveCtl.startStopTempDelta, stoveCtl.gasBoilerOn, stoveCtl.stovePumpOn, vwbuffer);
     }
-    printf("Status: rc=%d,ct=%d,lt=%d,spt=%d,delta=%d,gb=%d,sp=%d, %s\n", stoveCtl.remoteCtrl, stoveCtl.currentTemp, stoveCtl.lastTemp, stoveCtl.startPumpTemp, stoveCtl.startStopTempDelta, stoveCtl.gasBoilerOn, stoveCtl.stovePumpOn, vwbuffer);
+    printf("Status: rc=%d,ct=%d,lt=%d,spt=%d,delta=%d,gb=%d,sp=%d,vw=%s\n", stoveCtl.remoteCtrl, stoveCtl.currentTemp, stoveCtl.lastTemp, stoveCtl.startPumpTemp, stoveCtl.startStopTempDelta, stoveCtl.gasBoilerOn, stoveCtl.stovePumpOn, vwbuffer);
+    vwbuffer[0] = '\0';
 }
 
 void readDS18B20() {
