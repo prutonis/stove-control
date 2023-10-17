@@ -275,7 +275,7 @@ void serialTransmit() {
         sm.transitionTo(M2);
     } else if (stringStartsWith(serCtl.rcmd, M_GAS_BOILER_OFF)) {
         printf("Gas Boiler off\n");
-        sprintf(serCtl.tmsg, "%sgas_bolier_off:ok", MASTER_SID);
+        sprintf(serCtl.tmsg, "%sgas_boiler_off:ok", MASTER_SID);
         gasBoilerSet(false);
         remoteControlOn();
         sm.transitionTo(M0);
