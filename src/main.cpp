@@ -30,6 +30,11 @@ SoftwareSerial ser1(SER1_RX, SER1_TX);  // RX, TX
 
 #define TEMP_SENSOR A0
 
+#define NOMINAL_RESISTANCE 10000       //Nominal resistance at 25⁰C
+#define NOMINAL_TEMPERATURE 25   // temperature for nominal resistance (almost always 25⁰ C)
+#define BETA 3950  // The beta coefficient or the B value of the thermistor (usually 3000-4000) check the datasheet for the accurate value.
+#define R_REF 10000   //Value of  resistor used for the voltage divider
+
 #define M_GET_STATUS "status?"
 #define M_REPLY_STATUS "%sstatus=%s"
 #define M_GET_STOVE_TEMP "stove?"
@@ -53,13 +58,6 @@ SoftwareSerial ser1(SER1_RX, SER1_TX);  // RX, TX
 #define remoteControlOn() stoveCtl.remoteCtrl = true
 #define remoteControlOff() stoveCtl.remoteCtrl = false
 
-// THERMISTOR defines
-// These values are in the datasheet
-#define RT0 10000  // Ω
-#define B 3977     // K
-//--------------------------------------
-#define VCC 5   // Supply voltage
-#define R 1000  // R=1KΩ
 
 #define STOVE_PUMP_PIN A2
 #define GAS_BOILER_PIN A1
@@ -82,6 +80,7 @@ void serialTransmit(void);
 void stovePumpSet(bool onOff);
 void gasBoilerSet(bool onOff);
 void readThermistor(void);
+void readDS18B20();
 bool transitionS0S1();
 bool transitionS1S0();
 
@@ -90,9 +89,7 @@ void st_pump_on(void);
 void st_gas_stove_on(void);
 uint8_t checkSum(char *msg);
 
-// Variables
-float RT, VR, ln, TX, T0, VRT;  // for thermistor
-
+float vr, tv, temperature;  // variables for thermistor
 uint32_t t0, t1, t2, t3, t4, t5;  // timers
 uint16_t pulseCt;
 bool last = HIGH, vwMr = false;
@@ -158,7 +155,8 @@ void setup() {
     pinMode(TEMP_SENSOR, INPUT);
     pinMode(GAS_BOILER_PIN, OUTPUT);
     pinMode(STOVE_PUMP_PIN, OUTPUT);
-    T0 = 25 + 273.15;  // Temperature T0 from datasheet, conversion from Celsius to kelvin
+    analogReference(DEFAULT); // 5V?
+    analogReadResolution(12); // 12 bits
     stovePumpSet(false);
     gasBoilerSet(false);
 
@@ -189,6 +187,7 @@ void setup() {
 void loop() {
     if (timerExceed(t1, 5000)) {
         resetTimer(t1);
+        readDS18B20();
         readThermistor();
         printf("State: %d\n", sm.currentState);
         printInfo(false);
@@ -307,7 +306,7 @@ void serialTransmit() {
         printf("Unknown cmd.\n");
     }
     uint8_t crc = checkSum(serCtl.tmsg);
-    printf("Message to send: %s, checksum=%X\n", serCtl.tmsg, crc);
+    // printf("Message to send: %s, checksum=%X\n", serCtl.tmsg, crc);
     sprintf(serCtl.tmsg, "%s|0X%X|", serCtl.tmsg, crc);
     ser1.println(serCtl.tmsg);
     serCtl.rcmd = NULL;
@@ -349,22 +348,28 @@ void gasBoilerSet(bool onOff) {
 }
 
 void readThermistor() {
-    VRT = analogRead(TEMP_SENSOR);  // Acquisition analog value of VRT
-    VRT /= 4;                       // LGT8fx correction
+    tv = analogRead(TEMP_SENSOR);  // Acquisition analog value of VRT
+    Serial.print("ADC readings ");
+    Serial.println(tv);
+    
+    vr = 4095.0 / tv - 1.0;      // Acquisition of resistance value of thermistor
+    
+    vr = R_REF / vr;  // Calculate the resistance value of the thermistor
+    
+    //Serial.print("Thermistor resistance ");
+    Serial.println(vr);
 
-    VRT = (5.00 / 1023.00) * VRT;  // Conversion to voltage
-    VR = VCC - VRT;
-    RT = VRT / (VR / R);  // Resistance of RT
-
-    ln = log(RT / RT0);
-    TX = (1 / ((ln / B) + (1 / T0)));  // Temperature from thermistor
-
-    TX = TX - 273.15;  // Conversion to Celsius
-    Serial.println(TX);
-
+    temperature = vr / NOMINAL_RESISTANCE;     // (R/Ro)
+    temperature = log(temperature);                  // ln(R/Ro)
+    temperature /= BETA;                   // 1/B * ln(R/Ro)
+    temperature += 1.0 / (NOMINAL_TEMPERATURE + 273.15); // + (1/To)
+    temperature = 1.0 / temperature;                 // Invert
+    temperature -= 273.15;                         // convert absolute temp to C
+    //Serial.print("Temperature ");
+    Serial.println(temperature);
     // stoveCtl
     stoveCtl.lastTemp = stoveCtl.currentTemp;
-    stoveCtl.currentTemp = TX;
+    stoveCtl.currentTemp = temperature;
 }
 
 void printInfo(bool printToTxBuffer) {
@@ -377,8 +382,18 @@ void printInfo(bool printToTxBuffer) {
 
 void readDS18B20() {
     sensors.requestTemperatures();
-    stoveCtl.lastTemp = stoveCtl.currentTemp;
-    stoveCtl.currentTemp = sensors.getTempCByIndex(0);
+      // Get the temperature in Celsius
+    float temperatureC = sensors.getTempCByIndex(0);
+
+  // Check if the reading is valid
+  if (temperatureC != DEVICE_DISCONNECTED_C) {
+    printf("DS18B20=%f°C\r\n", temperatureC);
+  } else {
+    printf("Error: Could not read temperature data\n");
+  }
+    
+    //stoveCtl.lastTemp = stoveCtl.currentTemp;
+    //stoveCtl.currentTemp = sensors.getTempCByIndex(0);
 }
 
 uint8_t lct = 0;
